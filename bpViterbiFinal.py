@@ -1,0 +1,516 @@
+#!/usr/local/bin/python
+
+docstring = """
+DESCRIPTION
+    1. Applies k-fold classification on set
+    2. Generates emission probabilities with training set based on maximum likelihood estimate
+    3. run viterbi algorithm with emission probabilities on test set to generate predictions
+    4. evaluate predictions to generate summary statistics
+    5. save statistics with parameters in file
+
+USAGE:
+    1. Place in parent folder, along with the appendEntry.py and summarizeGest.py scripts.
+    2. Place original data in "data internship" folder.
+    3. Run pre-processing scripts to clean summary file and separate blood pressure data by user.
+    4. Run this script with unique summary statistic file output names, "n" for the number of k-folds, and "mornings" to choose AM or PM data.
+"""
+
+import csv
+import re
+import pandas as pd
+import numpy as np
+import matplotlib
+import datetime
+import os
+import itertools
+import summarizeGest
+import appendEntry
+import sklearn.model_selection as sk
+import time
+
+
+# generate Nas for results columns.
+
+def returnNas():
+    return pd.Series([Nan, Nan, Nan, Nan, Nan],
+                     index=resultsColumns)
+
+
+# Calculate transition probability for the number of normal to PE transitions.
+
+def getTransitionProbability(morning, dateCutoff, train):
+    positiveUsers = 0
+    resultsPE = pd.DataFrame(columns=resultsColumns)
+    resultsN = pd.DataFrame(columns=resultsColumns)
+    # Derive counts of normal, medium, high:
+    for subdir, dirs, files in os.walk('user/'):
+        for user in dirs:
+            cashew = train[
+                (train['user'] == user) & (train['morning'] == morning)]
+            if cashew.empty:
+                continue
+            PE = True
+            try:
+                # Counts normal, med, high, and derives
+                resultPE = count(PE, user, morning, dateCutoff)
+                resultsPE = resultsPE.append(resultPE, ignore_index=True)
+                # Count unique N->PE events (once per pre-eclampsic mother).
+                positiveUsers = positiveUsers + 1
+            except:
+                pass
+
+            PE = False
+            try:
+                # Counts normal, med, high, and derives
+                resultN = count(PE, user, morning, dateCutoff)
+                resultsN = resultsN.append(resultN, ignore_index=True)
+
+            except:
+                pass
+    resultsAllSum = resultsPE['normal'].sum() + resultsPE['medium'].sum() + resultsPE['high'].sum() + resultsN[
+        'normal'].sum() + resultsN['medium'].sum() + resultsN['high'].sum()
+
+    pi = round(positiveUsers / resultsAllSum, 5)
+    print('new pi: ' + str(pi))
+    return pi
+
+# Given blood pressure measurements, generate normal, medium, or high-risk emission observation (as defined in original summary file).
+
+def getObservedState(observation):
+    if ((observation['diastolic'] > 90) & (observation['systolic'] > 140)) | (observation['diastolic'] > 100):
+        return 'high'
+    elif ((observation['diastolic'] > 85) & (observation['systolic'] > 130)):
+        return 'medium'
+    else:
+        return 'normal'
+
+
+# Count normal, medium risk and high risk observations in a series.
+
+def countBPgroups(array):
+    high = array[((array['diastolic'] > 90) & (array['systolic'] > 140)) | (array['diastolic'] > 100)].shape[0]
+    medium = array[(array['diastolic'] > 85) & (array['diastolic'] < 90) & (array['systolic'] > 130) & (
+        array['systolic'] < 140)].shape[0]
+    normal = array.shape[0] - medium - high
+    return pd.Series([normal, medium, high],
+                     index=['normal', 'medium', 'high'])
+
+
+# Calculate percentages normal, medium, and high, and apply to pre-eclampsia percentages or non-pe percentages.
+
+def calculatePercentages(PE, number, series):
+    normal = series['normal'] / number
+    normal = round(series['normal'] / number, 3)
+    medium = round(series['medium'] / number, 3)
+    high = round(series['high'] / number, 3)
+    if PE == True:
+        return pd.Series([normal, medium, high],
+                         index=["PEpercentages_normal", "PEpercentages_medium", "PEpercentages_high"])
+    else:
+        return pd.Series([normal, medium, high],
+                         index=["Npercentages_normal", "Npercentages_medium", "Npercentages_high"])
+
+
+# Find file and check if user, group, morning and cutoff are appropriate to pass data to "countBPgroups"
+
+def count(PE, user, morning, trimCutoff):
+    dir = 'user/' + user + '/'
+    data = pd.read_csv(dir + 'BP_' + morning + '_compare2.csv', sep=',', header=0, parse_dates=['measured_at'],
+                       dayfirst=False)
+    data.sort_values(['measured_at'], inplace=True, ascending=True)
+    desc = pd.read_csv("data internship/Samenvatting_notwins.csv", sep=',', header=0, encoding="ISO-8859-1",
+                       index_col='Premom')
+
+    desc.ix[:]['Study completed untill delivery/admission MIC?'].fillna(0, inplace=True)
+
+    completion = (bool(desc.ix[user]['Study completed untill delivery/admission MIC?']))
+
+    PEHT = ((bool(desc.ix[user]['Diagnosis of gestational hypertension?'])) | (
+        bool(desc.ix[user]['Diagnosis of pre-eclampsia?'])))
+
+    if PEHT != PE:
+        returnNas()
+
+    if completion is not True:
+        returnNas()
+    if desc.ix[user]["BP's taken"] < 30:
+        returnNas()
+    if desc.ix[user]['Days participated'] < 30:
+        returnNas()
+
+    dateBP = data.filter(items=['gestational_age', 'diastolic', 'systolic'])
+    end = dateBP.shape[0]
+
+    try:
+        dateBPcut = dateBP.loc[dateBP['gestational_age'] >= trimCutoff]
+        dateBP.to_csv('ORIG.csv')
+        dateBPcut.to_csv('CUT.csv')
+    except:
+        print(user + ' CUT FAIL')
+        returnNas()
+    return countBPgroups(dateBPcut)
+
+
+# Generate emission probabilities
+def generateEmissionProbabilities(morning, dateCutoff, train):
+    resultsPE = pd.DataFrame(columns=resultsColumns)
+    resultsN = pd.DataFrame(columns=resultsColumns)
+    # Derive counts of normal, medium, high:
+    for subdir, dirs, files in os.walk('user/'):
+        for user in dirs:
+            cashew = train[
+                (train['user'] == user) & (train['morning'] == morning)]
+            if cashew.empty:
+                continue
+            PE = True
+            try:
+                # Counts normal, med, high, and derives
+                resultPE = count(PE, user, morning, dateCutoff)
+                resultsPE = resultsPE.append(resultPE, ignore_index=True)
+            except:
+                pass
+
+            PE = False
+            try:
+                # Counts normal, med, high, and derives
+                resultN = count(PE, user, morning, dateCutoff)
+                resultsN = resultsN.append(resultN, ignore_index=True)
+
+            except:
+                pass
+
+    # Calculate percentages
+
+    resultsSumsPE = pd.Series([resultsPE['normal'].sum(), resultsPE['medium'].sum(), resultsPE['high'].sum()],
+                              index=resultsColumns)
+    resultsSumsN = pd.Series([resultsN['normal'].sum(), resultsN['medium'].sum(), resultsN['high'].sum()],
+                             index=resultsColumns)
+    number = resultsSumsPE.normal + resultsSumsPE.medium + resultsSumsPE.high
+    percentagesPE = calculatePercentages(True, number, resultsSumsPE)
+    number = resultsSumsN.normal + resultsSumsN.medium + resultsSumsN.high
+    percentagesN = calculatePercentages(False, number, resultsSumsN)
+    percentages = percentagesPE.append(percentagesN)
+    return percentages
+
+
+def viterbi(obs, states, start_p, trans_p, emit_p):
+    V = [{}]
+    for st in states:
+        V[0][st] = {"prob": start_p[st] * emit_p[st][obs[0]], "prev": None}
+    # Run Viterbi when t > 0
+    for t in range(1, len(obs)):
+        V.append({})
+        for st in states:
+            max_tr_prob = max(V[t - 1][prev_st]["prob"] * trans_p[prev_st][st] for prev_st in states)
+            for prev_st in states:
+                if V[t - 1][prev_st]["prob"] * trans_p[prev_st][st] == max_tr_prob:
+                    max_prob = max_tr_prob * emit_p[st][obs[t]]
+                    V[t][st] = {"prob": max_prob, "prev": prev_st}
+                    break
+
+    for line in dptable(V):
+        print(line)
+    opt = []
+    # The highest probability
+    max_prob = max(value["prob"] for value in V[-1].values())
+    previous = None
+    # Get most probable state and its backtrack
+    for st, data in V[-1].items():
+        if data["prob"] == max_prob:
+            opt.append(st)
+            previous = st
+            break
+    # Follow the backtrack till the first observation
+    for t in range(len(V) - 2, -1, -1):
+        opt.insert(0, V[t + 1][previous]["prev"])
+        previous = V[t + 1][previous]["prev"]
+    j = 0
+    print(opt)
+    for i in opt:
+        j = j + 1
+        if i == 'PE':
+            print('SUCCESS VITERBI')
+            return len(obs)
+            # return int(j)
+    # if PE not found, return dummy value to prompt code to continue
+    return int(111111)
+
+
+def dptable(V):
+    # Print a table of steps from dictionary
+    yield " ".join(("%12d" % i) for i in range(len(V)))
+    for state in V[0]:
+        yield "%.7s: " % state + " ".join("%.7s" % ("%f" % v[state]["prob"]) for v in V)
+
+
+######### START MAIN CODE #########
+
+print('START')
+tic = time.clock()
+maindir = 'user/'
+
+######### Prepare before modeling #########
+
+# Declare columns for output
+
+resultsColumns = ['normal', 'medium', 'high']
+userResultsColumns = ["user", "morning", "birthAge", "micAdmissionAge", "predictHypertension", "predictGestAge",
+                      "predictCorrect"]
+testedOutputColumns = ['cutoff', "PEpercentages_normal", "PEpercentages_medium", "PEpercentages_high",
+                       "Npercentages_normal", "Npercentages_medium", "Npercentages_high"]
+summarizedModelColumns = ['truePositives', 'falsePositives', 'trueNegatives', 'falseNegatives', 'accuracyAtEvent',
+                          'sensitivity',
+                          'specificity']
+
+# Add extra columns for new summary statistics:
+for i in range(100, 290, 1):
+    summarizedModelColumns.append('accuracyAtGestAge' + str(i))
+for i in range(0, 29, 7):
+    summarizedModelColumns.append('preDeliveryAccuracy' + str(i))
+    summarizedModelColumns.append('preAdmissionAccuracy' + str(i))
+
+allUsersColumns = ['user', 'morning']
+
+# Declare new output files
+
+emissionProbabilitiesFout = 'emissionProbabilitiesCategories.csv'
+testedPiCutoffFout = '20180214.csv'
+piCutoffSavedFout = 'piCutoffSavedProbabilities.csv'
+
+# Declare new dataframes for output, further analysis
+
+results = pd.DataFrame(columns=resultsColumns)
+userResults = pd.DataFrame(columns=userResultsColumns)
+allUsers = pd.DataFrame(columns=allUsersColumns)
+
+# Find emission probabilities output
+
+try:
+    testedParams = pd.read_csv(emissionProbabilitiesFout, sep=',', header=0)
+except:
+    print('old file not found')
+    testedParams = pd.DataFrame(columns=testedOutputColumns)
+
+# Find repository of old cutoffs and pis
+
+try:
+    testedPiCutoff = pd.read_csv(testedPiCutoffFout, sep=',', header=0)
+except:
+    print('old pi cutoff file not found')
+    testedPiCutoff = pd.DataFrame(columns=summarizedModelColumns)
+
+######### MAIN CODE #########
+
+mornings = ['AM']
+
+for cutoff in range(0, 27, 28):
+    print('CUTOFF:' + str(cutoff))
+    # Generate list of appropriate users
+    for subdir, dirs, files in os.walk('user/'):
+        for user in dirs:
+            for morning in mornings:
+                # for morning in ['AM', 'PM']:
+                try:
+                    appropriateUser = appendEntry.appendEntry(user, morning, cutoff)
+                    allUsers = allUsers.append(appropriateUser, ignore_index=True)
+                except:
+                    continue
+
+    allUsers.to_csv('users.csv', index=False)
+    n = allUsers.shape[0] - 1
+    #n = 2
+    print('K FOLDS:')
+    print(n)
+    kf = sk.KFold(n_splits=n)
+    trainProbabilities = pd.DataFrame(columns=testedOutputColumns)
+
+    # Check if parameters have been used yet
+    try:
+        cashew = testedPiCutoff[
+            (testedPiCutoff['transition'] == pi) & (testedPiCutoff['cutoff'] == cutoff)]
+        if not cashew.empty:
+            print('ALREADY TESTED UNDER NEW CONDITIONS')
+            continue
+    except:
+        pass
+
+    userResults = pd.DataFrame(columns=userResultsColumns)
+    for train, test in kf.split(allUsers):
+        train_data = pd.DataFrame(np.array(allUsers)[train], columns=allUsersColumns)
+        print('TRAIN LENGTH: ' + str(train_data.shape[0]))
+        test_data = pd.DataFrame(np.array(allUsers)[test], columns=allUsersColumns)
+        print('TEST LENGTH: ' + str(test_data.shape[0]))
+
+        pi = getTransitionProbability(morning, cutoff, train_data)
+        trans_p = {
+            'N': {'N': 1 - pi, 'PE': pi},
+            'PE': {'N': 0, 'PE': 1}
+        }
+        kModelResults = pd.DataFrame(columns=summarizedModelColumns)
+        print('PI:')
+        print(pi)
+        probability = generateEmissionProbabilities(morning, cutoff, train_data)
+        probability['cutoff'] = cutoff
+        trainProbabilities = trainProbabilities.append(probability, ignore_index=True)
+        trainProbabilities.to_csv('trainKfolds.csv', index=False)
+
+        # run viterbi algorithm
+        obs = ('normal', 'medium', 'high')
+        states = ('N', 'PE')
+        start_p = {'N': 1, 'PE': 0}
+
+        desc = pd.read_csv("data internship/Samenvatting_notwins.csv", sep=',', header=0, encoding="ISO-8859-1",
+                           index_col='Premom')
+
+        # generate emission probabilities
+        try:
+            emit_p = {
+
+                'N': {'normal': float(probability.Npercentages_normal),
+                      'medium': float(probability.Npercentages_medium),
+                      'high': float(probability.Npercentages_high)},
+                'PE': {'normal': float(probability.PEpercentages_normal),
+                       'medium': float(probability.PEpercentages_medium),
+                       'high': float(probability.PEpercentages_high)}
+            }
+        except:
+            print('CUTOFF NOT FOUND')
+            continue
+
+        ######### Run viterbi algorithm and generate summary statistics of model #########
+
+        for subdir, dirs, files in os.walk('user/'):
+            for user in dirs:
+                for morning in mornings:
+
+                    # Check if the user, and morning are included in the test dataset
+                    cashew = test_data[
+                        (test_data['user'] == user) & (test_data['morning'] == morning)]
+                    # Skip entry if not included
+                    if cashew.empty:
+                        continue
+
+                    # Find BP dataset, prepare for modeling (trim by gest age)
+                    try:
+                        dir = 'user/' + user + '/'
+                        data = pd.read_csv(dir + 'BP_' + morning + '_compare2.csv', sep=',', header=0,
+                                           parse_dates=['measured_at'],
+                                           dayfirst=False)
+                    except:
+                        print('read fail')
+                        continue
+                    data.sort_values(['measured_at'], inplace=True, ascending=True)
+                    dateBP = data.filter(items=['measured_at', 'gestational_age', 'diastolic', 'systolic'])
+                    dateBPcut = dateBP.loc[dateBP['gestational_age'] >= cutoff]
+
+                    # Generate new list of observations
+
+                    obs = []
+                    for index, observation in dateBPcut.iterrows():
+                        obs.append(getObservedState(observation))
+
+                    predictTime = 11111
+
+                    # Get admission, birth dates
+                    try:
+                        micAdmissionDate = pd.to_datetime(desc.ix[user]['Date admission MIC '])
+                        print('MIC ADMISSION DATE:')
+                        print(micAdmissionDate)
+                    except:
+                        print('MIC admission date get fail')
+                        pass
+                    try:
+                        birthDate = pd.to_datetime(desc.ix[user]['Delivery date'])
+                        print('BIRTH DATE:')
+                        print(birthDate)
+                    except:
+                        print('birth date get fail')
+                        pass
+
+                    # Get inclusion date and GA, derive
+                    try:
+                        inclusionDate = pd.to_datetime(desc.ix[user]['Inclusiedate'])
+                        inclusionGA = str(desc.ix[user]['GA inclusion'])
+                        weeksAtInclusion = int(inclusionGA.split(" ")[0][:-1])
+                        daysAtInclusion = int(inclusionGA.split(" ")[1][0])
+                        print('INCLUSION DATE:')
+                        print(inclusionDate)
+                    except:
+                        print('inclusion date, ga pre-generation fail')
+
+                    try:
+                        daysDifference = (micAdmissionDate - inclusionDate).days
+                        micAdmissionAge = datetime.timedelta(
+                            **{'days': weeksAtInclusion * 7 + daysAtInclusion + daysDifference}).days
+                    except:
+                        print('MIC ADMISSION AGE FAIL')
+                        micAdmissionAge = 11111
+
+                    try:
+                        daysDifference = (birthDate - inclusionDate).days
+                        print(daysDifference)
+                        birthAge = datetime.timedelta(
+                            **{'days': weeksAtInclusion * 7 + daysAtInclusion + daysDifference}).days
+                    except:
+                        print('BIRTH AGE CALC FAIL')
+                        birthAge = 11111
+
+                    start = dateBPcut['gestational_age'].min()
+                    # Run Viterbi algorithm on the sequence of observations to find best path, then return where occurrence of N->PE happened.
+                    # Negative events and false positives return 11111
+                    days = 111111
+                    for i in range(1, len(obs)):
+                        days = viterbi(obs[0:i], states, start_p, trans_p, emit_p)
+                        # Statistics for outside analysis and production of predictTime (working around unsolved problem)
+                        if days < 111111:
+                            break
+                    # Generation of evaluation statistics for each user, morning
+                    predictGestAge = start + days
+                    predictHypertension = False
+                    predictCorrect = False
+
+                    if predictGestAge < (birthAge or micAdmissionAge):
+                        predictHypertension = True
+
+                    if (bool(desc.ix[user]['Diagnosis of gestational hypertension?'])) | (
+                            bool(desc.ix[user]['Diagnosis of pre-eclampsia?'])) == predictHypertension:
+                        predictCorrect = True
+                    userResult = pd.Series(
+                        [user, morning, birthAge, micAdmissionAge, predictHypertension, predictGestAge,
+                         predictCorrect],
+                        index=userResultsColumns)
+
+                    try:
+                        # Append individual user results to datasets results
+
+                        userResults = userResults.append(userResult, ignore_index=True)
+                        userResults.to_csv('userResults.csv', index=False)
+                    except:
+                        print('append, write fail')
+
+    # Summarize model results for entire dataset
+    modelResults = summarizeGest.summarize(userResults)
+    modelResults['cutoff'] = cutoff
+    modelResults['transition'] = round(pi, 5)
+    modelResults.to_csv('testGest.csv', index=False)
+
+    # Add new, averaged model results to list of previously-tested parameters
+    try:
+        testedPiCutoff = testedPiCutoff.append(modelResults, ignore_index=True)
+        testedPiCutoff.to_csv(testedPiCutoffFout, index=False)
+    except:
+        continue
+
+    # Save train probabilities aggregated
+    try:
+        trainedProbabilities = pd.DataFrame(
+            trainProbabilities[testedOutputColumns].apply(lambda row: np.mean(row), axis=0),
+            index=testedOutputColumns)
+        trainedProbabilities = trainedProbabilities.transpose()
+        testedParams = testedParams.append(trainedProbabilities, ignore_index=True)
+        testedParams.to_csv(piCutoffSavedFout, index=False)
+    except:
+        continue
+toc = time.clock()
+print('TIMING:')
+print(toc - tic)
