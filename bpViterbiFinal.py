@@ -27,7 +27,7 @@ import summarizeGest
 import appendEntry
 import sklearn.model_selection as sk
 import time
-
+import math
 
 # generate Nas for results columns.
 
@@ -40,6 +40,7 @@ def returnNas():
 
 def getTransitionProbability(morning, dateCutoff, train):
     positiveUsers = 0
+    allUsers = 0
     resultsPE = pd.DataFrame(columns=resultsColumns)
     resultsN = pd.DataFrame(columns=resultsColumns)
     # Derive counts of normal, medium, high:
@@ -49,6 +50,7 @@ def getTransitionProbability(morning, dateCutoff, train):
                 (train['user'] == user) & (train['morning'] == morning)]
             if cashew.empty:
                 continue
+            allUsers = allUsers+1
             PE = True
             try:
                 # Counts normal, med, high, and derives
@@ -70,7 +72,7 @@ def getTransitionProbability(morning, dateCutoff, train):
     resultsAllSum = resultsPE['normal'].sum() + resultsPE['medium'].sum() + resultsPE['high'].sum() + resultsN[
         'normal'].sum() + resultsN['medium'].sum() + resultsN['high'].sum()
 
-    pi = round(positiveUsers / resultsAllSum, 5)
+    pi = round(positiveUsers / (resultsAllSum+allUsers), 5)
     print('new pi: ' + str(pi))
     return pi
 
@@ -83,6 +85,7 @@ def getObservedState(observation):
         return 'medium'
     else:
         return 'normal'
+
 
 
 # Count normal, medium risk and high risk observations in a series.
@@ -115,7 +118,7 @@ def calculatePercentages(PE, number, series):
 
 def count(PE, user, morning, trimCutoff):
     dir = 'user/' + user + '/'
-    data = pd.read_csv(dir + 'BP_' + morning + '_compare2.csv', sep=',', header=0, parse_dates=['measured_at'],
+    data = pd.read_csv(dir + 'BP_' + morning + '.csv', sep=',', header=0, parse_dates=['measured_at'],
                        dayfirst=False)
     data.sort_values(['measured_at'], inplace=True, ascending=True)
     desc = pd.read_csv("data internship/Samenvatting_notwins.csv", sep=',', header=0, encoding="ISO-8859-1",
@@ -130,13 +133,13 @@ def count(PE, user, morning, trimCutoff):
 
     if PEHT != PE:
         returnNas()
-
-    if completion is not True:
-        returnNas()
-    if desc.ix[user]["BP's taken"] < 30:
-        returnNas()
-    if desc.ix[user]['Days participated'] < 30:
-        returnNas()
+    #
+    # if completion is not True:
+    #     returnNas()
+    # if desc.ix[user]["BP's taken"] < 30:
+    #     returnNas()
+    # if desc.ix[user]['Days participated'] < 30:
+    #     returnNas()
 
     dateBP = data.filter(items=['gestational_age', 'diastolic', 'systolic'])
     end = dateBP.shape[0]
@@ -226,14 +229,30 @@ def viterbi(obs, states, start_p, trans_p, emit_p):
         previous = V[t + 1][previous]["prev"]
     j = 0
     print(opt)
+    emissionCounts ={
+            'N': {'normal': 0,
+                  'medium': 0,
+                  'high': 0},
+            'PE': {'normal': 0,
+                   'medium': 0,
+                   'high': 0}
+        }
+    transitionCounts = {
+        'N': {'N': 0, 'PE': 0},
+        'PE': {'N': 0, 'PE': 0}
+    }
     for i in opt:
         j = j + 1
         if i == 'PE':
             print('SUCCESS VITERBI')
-            return len(obs)
+            returnInt = len(obs)
+            return pd.Series([returnInt, math.log10(max_prob), emissionCounts, transitionCounts],
+                             index=['returnInt', 'max_prob', 'emissionCounts', 'transitionCounts'])
             # return int(j)
     # if PE not found, return dummy value to prompt code to continue
-    return int(111111)
+    returnInt = int(111111)
+    return pd.Series([returnInt, math.log10(max_prob), emissionCounts, transitionCounts],
+                     index=['returnInt','max_prob','emissionCounts', 'transitionCounts'])
 
 
 def dptable(V):
@@ -255,7 +274,7 @@ maindir = 'user/'
 
 resultsColumns = ['normal', 'medium', 'high']
 userResultsColumns = ["user", "morning", "birthAge", "micAdmissionAge", "predictHypertension", "predictGestAge",
-                      "predictCorrect"]
+                      "predictCorrect", "admittedDueToTM"]
 testedOutputColumns = ['cutoff', "PEpercentages_normal", "PEpercentages_medium", "PEpercentages_high",
                        "Npercentages_normal", "Npercentages_medium", "Npercentages_high"]
 summarizedModelColumns = ['truePositives', 'falsePositives', 'trueNegatives', 'falseNegatives', 'accuracyAtEvent',
@@ -274,14 +293,9 @@ allUsersColumns = ['user', 'morning']
 # Declare new output files
 
 emissionProbabilitiesFout = 'emissionProbabilitiesCategories.csv'
-testedPiCutoffFout = '20180214.csv'
+testedPiCutoffFout = '20180226.csv'
 piCutoffSavedFout = 'piCutoffSavedProbabilities.csv'
 
-# Declare new dataframes for output, further analysis
-
-results = pd.DataFrame(columns=resultsColumns)
-userResults = pd.DataFrame(columns=userResultsColumns)
-allUsers = pd.DataFrame(columns=allUsersColumns)
 
 # Find emission probabilities output
 
@@ -300,48 +314,65 @@ except:
     testedPiCutoff = pd.DataFrame(columns=summarizedModelColumns)
 
 ######### MAIN CODE #########
-
+allUsers = pd.DataFrame(columns=allUsersColumns)
 mornings = ['AM']
+cutoff=0
+userResults = pd.DataFrame(columns=userResultsColumns)
+# Generate list of appropriate users
+for subdir, dirs, files in os.walk('user/'):
+    for user in dirs:
+        for morning in mornings:
+            # for morning in ['AM', 'PM']:
+            try:
+                appropriateUser = appendEntry.appendEntry(user, morning, cutoff)
+                allUsers = allUsers.append(appropriateUser, ignore_index=True)
+            except:
+                continue
 
-for cutoff in range(0, 27, 28):
-    print('CUTOFF:' + str(cutoff))
-    # Generate list of appropriate users
-    for subdir, dirs, files in os.walk('user/'):
-        for user in dirs:
-            for morning in mornings:
-                # for morning in ['AM', 'PM']:
-                try:
-                    appropriateUser = appendEntry.appendEntry(user, morning, cutoff)
-                    allUsers = allUsers.append(appropriateUser, ignore_index=True)
-                except:
-                    continue
+allUsers.to_csv('users.csv', index=False)
+n = allUsers.shape[0] - 1
+#n = 2
+print('K FOLDS:')
+print(n)
+kf = sk.KFold(n_splits=n)
+trainProbabilities = pd.DataFrame(columns=testedOutputColumns)
 
-    allUsers.to_csv('users.csv', index=False)
-    n = allUsers.shape[0] - 1
-    #n = 2
-    print('K FOLDS:')
-    print(n)
-    kf = sk.KFold(n_splits=n)
-    trainProbabilities = pd.DataFrame(columns=testedOutputColumns)
-
-    # Check if parameters have been used yet
-    try:
-        cashew = testedPiCutoff[
-            (testedPiCutoff['transition'] == pi) & (testedPiCutoff['cutoff'] == cutoff)]
-        if not cashew.empty:
-            print('ALREADY TESTED UNDER NEW CONDITIONS')
-            continue
-    except:
+# Check if parameters have been used yet
+try:
+    cashew = testedPiCutoff[
+        (testedPiCutoff['transition'] == pi) & (testedPiCutoff['cutoff'] == cutoff)]
+    if not cashew.empty:
+        print('ALREADY TESTED UNDER NEW CONDITIONS')
         pass
+except:
+    pass
+scores = []
+savedScores = []
+piModifiers = []
+savedPis = []
+score = 0.2
+oldScore = 0
+piModifier = 0.085
+iterstep = 0.001
 
+while piModifier<=0.089:
+    # Declare new dataframes for output, further analysis
+
+    results = pd.DataFrame(columns=resultsColumns)
     userResults = pd.DataFrame(columns=userResultsColumns)
+
+
+    oldScore=score
+    scores = []
     for train, test in kf.split(allUsers):
+
         train_data = pd.DataFrame(np.array(allUsers)[train], columns=allUsersColumns)
         print('TRAIN LENGTH: ' + str(train_data.shape[0]))
         test_data = pd.DataFrame(np.array(allUsers)[test], columns=allUsersColumns)
         print('TEST LENGTH: ' + str(test_data.shape[0]))
-
-        pi = getTransitionProbability(morning, cutoff, train_data)
+        #pi = 0.09318
+        pi = getTransitionProbability(morning, cutoff, train_data) + piModifier
+        savedPis.append(pi)
         trans_p = {
             'N': {'N': 1 - pi, 'PE': pi},
             'PE': {'N': 0, 'PE': 1}
@@ -350,6 +381,9 @@ for cutoff in range(0, 27, 28):
         print('PI:')
         print(pi)
         probability = generateEmissionProbabilities(morning, cutoff, train_data)
+        print('NEW PROBABILITIES')
+        print(probability)
+
         probability['cutoff'] = cutoff
         trainProbabilities = trainProbabilities.append(probability, ignore_index=True)
         trainProbabilities.to_csv('trainKfolds.csv', index=False)
@@ -393,7 +427,7 @@ for cutoff in range(0, 27, 28):
                     # Find BP dataset, prepare for modeling (trim by gest age)
                     try:
                         dir = 'user/' + user + '/'
-                        data = pd.read_csv(dir + 'BP_' + morning + '_compare2.csv', sep=',', header=0,
+                        data = pd.read_csv(dir + 'BP_' + morning + '.csv', sep=',', header=0,
                                            parse_dates=['measured_at'],
                                            dayfirst=False)
                     except:
@@ -413,11 +447,14 @@ for cutoff in range(0, 27, 28):
 
                     # Get admission, birth dates
                     try:
-                        micAdmissionDate = pd.to_datetime(desc.ix[user]['Date admission MIC '])
-                        print('MIC ADMISSION DATE:')
-                        print(micAdmissionDate)
+                        if desc.ix[user]['Admission MIC because of TM?'] > 0:
+                            admittedTM = True
+                            micAdmissionDate = pd.to_datetime(desc.ix[user]['Date admission MIC '])
+                        else:
+                            admittedTM = False
+                            micAdmissionDate = ''
+                            pass
                     except:
-                        print('MIC admission date get fail')
                         pass
                     try:
                         birthDate = pd.to_datetime(desc.ix[user]['Delivery date'])
@@ -433,8 +470,6 @@ for cutoff in range(0, 27, 28):
                         inclusionGA = str(desc.ix[user]['GA inclusion'])
                         weeksAtInclusion = int(inclusionGA.split(" ")[0][:-1])
                         daysAtInclusion = int(inclusionGA.split(" ")[1][0])
-                        print('INCLUSION DATE:')
-                        print(inclusionDate)
                     except:
                         print('inclusion date, ga pre-generation fail')
 
@@ -460,10 +495,15 @@ for cutoff in range(0, 27, 28):
                     # Negative events and false positives return 11111
                     days = 111111
                     for i in range(1, len(obs)):
-                        days = viterbi(obs[0:i], states, start_p, trans_p, emit_p)
+                        viterbiResult = viterbi(obs[0:i], states, start_p, trans_p, emit_p)
+                        days = viterbiResult['returnInt']
+                        currentScore = viterbiResult['max_prob']
+
+
                         # Statistics for outside analysis and production of predictTime (working around unsolved problem)
                         if days < 111111:
                             break
+                    scores.append(currentScore)
                     # Generation of evaluation statistics for each user, morning
                     predictGestAge = start + days
                     predictHypertension = False
@@ -477,7 +517,7 @@ for cutoff in range(0, 27, 28):
                         predictCorrect = True
                     userResult = pd.Series(
                         [user, morning, birthAge, micAdmissionAge, predictHypertension, predictGestAge,
-                         predictCorrect],
+                         predictCorrect, admittedTM],
                         index=userResultsColumns)
 
                     try:
@@ -488,29 +528,39 @@ for cutoff in range(0, 27, 28):
                     except:
                         print('append, write fail')
 
+
     # Summarize model results for entire dataset
     modelResults = summarizeGest.summarize(userResults)
     modelResults['cutoff'] = cutoff
     modelResults['transition'] = round(pi, 5)
     modelResults.to_csv('testGest.csv', index=False)
+    userResults = pd.DataFrame(columns=userResultsColumns)
+    score = max(modelResults['accuracyAtEvent']*0.2+(modelResults['preAdmissionAccuracy0'])[0])
+    print(score)
+    savedScores.append(score)
+    pd.DataFrame(savedScores).to_csv('scores.csv')
+    pd.DataFrame(savedPis).to_csv('savedPis.csv')
+    piModifier = piModifier + iterstep
+    piModifiers.append(piModifier)
+    pd.DataFrame(piModifiers).to_csv('piModifiers.csv')
 
     # Add new, averaged model results to list of previously-tested parameters
     try:
         testedPiCutoff = testedPiCutoff.append(modelResults, ignore_index=True)
         testedPiCutoff.to_csv(testedPiCutoffFout, index=False)
     except:
-        continue
+        pass
 
-    # Save train probabilities aggregated
-    try:
-        trainedProbabilities = pd.DataFrame(
-            trainProbabilities[testedOutputColumns].apply(lambda row: np.mean(row), axis=0),
-            index=testedOutputColumns)
-        trainedProbabilities = trainedProbabilities.transpose()
-        testedParams = testedParams.append(trainedProbabilities, ignore_index=True)
-        testedParams.to_csv(piCutoffSavedFout, index=False)
-    except:
-        continue
+# Save train probabilities aggregated
+try:
+    trainedProbabilities = pd.DataFrame(
+        trainProbabilities[testedOutputColumns].apply(lambda row: np.mean(row), axis=0),
+        index=testedOutputColumns)
+    trainedProbabilities = trainedProbabilities.transpose()
+    testedParams = testedParams.append(trainedProbabilities, ignore_index=True)
+    testedParams.to_csv(piCutoffSavedFout, index=False)
+except:
+    pass
 toc = time.clock()
 print('TIMING:')
 print(toc - tic)
