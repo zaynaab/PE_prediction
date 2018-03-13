@@ -14,9 +14,13 @@ import pandas as pd
 import numpy as np
 import matplotlib
 import datetime
+
+matplotlib.use('TkAgg')
 import warnings
+import matplotlib.pyplot as plt
 import itertools
 import numpy as np
+import seaborn as sns
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import acf
 from statsmodels.tsa.stattools import pacf
@@ -39,12 +43,22 @@ def preDeliveryAccuracyAtDay(trueNegatives, truePositives, dfindex, age):
         truePositives['predictGestAge'] < (truePositives['birthAge'] - age)].shape[0]) / dfindex
 
 
-def preAdmissionAccuracyAtDay(trueNegatives, truePositives, falseNegatives,dfindex, age):
+def preAdmissionAccuracyAtDay(trueNegatives, truePositives, falseNegatives, dfindex, age):
     newTrue = truePositives.loc[
         truePositives['predictGestAge'] < (truePositives[
                                                'micAdmissionAge'] - age)].shape[0]
-    #return newTrue / (truePositives.shape[0]+falseNegatives.shape[0])
+    # return newTrue / (truePositives.shape[0]+falseNegatives.shape[0])
     return newTrue / (truePositives.shape[0])
+
+
+def sensitivityAtDay(truePositives, falseNegatives, age):
+    return ((truePositives.loc[truePositives['predictGestAge'] < age].shape[0])/(truePositives.loc[truePositives['predictGestAge'] < age].shape[0]+falseNegatives.shape[0]))
+
+def specificityAtDay(trueNegatives, falsePositives, age):
+    return trueNegatives.shape[0] / (falsePositives.loc[
+                                         falsePositives['predictGestAge'] < (falsePositives['birthAge'] - age)].shape[
+                                         0] + trueNegatives.shape[0])
+
 
 def summarize(df):
     desc = pd.read_csv("data internship/Samenvatting_notwins.csv", sep=',', header=0, encoding="ISO-8859-1",
@@ -54,7 +68,7 @@ def summarize(df):
     falsePositives = df.loc[(df['predictHypertension'] == True) & (df['predictCorrect'] == False)]
     trueNegatives = df.loc[(df['predictHypertension'] == False) & (df['predictCorrect'] == True)]
     falseNegatives = df.loc[(df['predictHypertension'] == False) & (df['predictCorrect'] == False)]
-    acceptedTM = df.loc[df['admittedDueToTM']==True]
+    acceptedTM = df.loc[df['admittedDueToTM'] == True]
 
     accuracyAtEvent = (trueNegatives.shape[0] + truePositives.loc[
         (truePositives['predictGestAge'] < truePositives['birthAge']) |
@@ -74,14 +88,20 @@ def summarize(df):
     for i in range(100, 290, 1):
         columns.append('accuracyAtGestAge' + str(i))
         output.append(accuracyAtDay(trueNegatives, truePositives, len(df.index), i))
+        columns.append('sensitivityAtGestAge' + str(i))
+        output.append(sensitivityAtDay(truePositives, falseNegatives, i))
 
-    for i in range(0, 29, 7):
+    for i in range(0, 57, 7):
         columns.append('preDeliveryAccuracy' + str(i))
         columns.append('preAdmissionAccuracy' + str(i))
+        # columns.append('sensititivityAtDay' +str(i))
+        columns.append('specificityAtDay' + str(i))
         output.append(preDeliveryAccuracyAtDay(trueNegatives, truePositives,
                                                len(df.index), i))
         output.append(preAdmissionAccuracyAtDay(trueNegatives, acceptedTM, falseNegatives,
                                                 len(df.index), i))
+        # output.append(sensitivityAtDay(truePositives, falseNegatives, i))
+        output.append(specificityAtDay(trueNegatives, falsePositives, i))
 
     try:
         outputFrame = pd.DataFrame(columns=columns)
