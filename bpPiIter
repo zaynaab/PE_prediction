@@ -1,5 +1,4 @@
 #!/usr/local/bin/python
-
 docstring = """
 DESCRIPTION
     1. Applies k-fold classification on set
