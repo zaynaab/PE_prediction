@@ -59,7 +59,6 @@ def specificityAtDay(trueNegatives, falsePositives, age):
                                          falsePositives['predictGestAge'] < (falsePositives['birthAge'] - age)].shape[
                                          0] + trueNegatives.shape[0])
 
-
 def summarize(df):
     desc = pd.read_csv("data internship/Samenvatting_notwins.csv", sep=',', header=0, encoding="ISO-8859-1",
                        index_col='Premom')
