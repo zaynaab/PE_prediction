@@ -6,6 +6,7 @@ DESCRIPTION
     3. run viterbi algorithm with emission probabilities on test set to generate predictions
     4. evaluate predictions to generate summary statistics
     5. save statistics with parameters in file
+    6. generate ROC from file to evaluate model performance
 
 USAGE:
     1. Place in parent folder, along with the appendEntry.py and summarizeGest.py scripts.
