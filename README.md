@@ -1,4 +1,3 @@
-# PE_prediction
 Raw data to final modeling
 
 Pre-processing:
@@ -12,6 +11,9 @@ bloodPressureProcess.py
 
 Interpolates values, finishes processing BP data by user.
 bloodPressureModelBuildUsers.py
+
+Generates additional values (no necessary operations, but further modeling performed on files generated with this script).
+modelBP_ModParameters.py
 
 
 Modeling
