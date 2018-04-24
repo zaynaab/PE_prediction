@@ -7,7 +7,6 @@ DESCRIPTION
     3. run viterbi algorithm with emission probabilities on test set to generate predictions
     4. evaluate predictions to generate summary statistics
     5. save statistics with parameters in file
-
 USAGE:
     1. Place in parent folder, along with the appendEntry.py and summarizeGest.py scripts.
     2. Place original data in "data internship" folder.
@@ -376,11 +375,11 @@ savedPis = []
 score = 0.2
 oldScore = 0
 
-iterstep = 0.001
+iterstep = 0.002
 #piModifier = 0
-piModifier = 0.09
+piModifier = 0.008
 #while piModifier<=0:
-while piModifier<=0.09:
+while piModifier<=0.008:
     # Declare new dataframes for output, further analysis
 
     results = pd.DataFrame(columns=resultsColumns)
@@ -450,7 +449,7 @@ while piModifier<=0.09:
                     # Find BP dataset, prepare for modeling (trim by gest age)
                     try:
                         dir = 'user/' + user + '/'
-                        data = pd.read_csv(dir + 'BP_' + morning + '2.csv', sep=',', header=0,
+                        data = pd.read_csv(dir + 'BP_' + morning + '_compare3.csv', sep=',', header=0,
                                            parse_dates=['measured_at'],
                                            dayfirst=False)
                     except:
@@ -650,4 +649,3 @@ except:
 toc = time.clock()
 print('TIMING:')
 print(toc - tic)
-
